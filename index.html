@@ -1,0 +1,29 @@
+int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+while (numNewMessages) {
+  for (int i = 0; i < numNewMessages; i++) {
+    String text = bot.messages[i].text;
+    
+    if (text == "/status") {
+      bot.sendMessage(CHAT_ID,
+        "T: " + String(temp, 1) + " H: " + String(hum, 1) + "% R:" + 
+        (radiatorState ? "ON" : "OFF") + " Hum:" + (humState ? "ON" : "OFF"), "");
+    } else if (text == "/radiator_on") {
+      radiatorState = true;
+      digitalWrite(RELAY_VALVE, RELAY_ON); digitalWrite(RELAY_FAN, RELAY_ON);
+      bot.sendMessage(CHAT_ID, "라디에이터 ON", "");
+    } else if (text == "/radiator_off") {
+      radiatorState = false;
+      digitalWrite(RELAY_VALVE, RELAY_OFF); digitalWrite(RELAY_FAN, RELAY_OFF);
+      bot.sendMessage(CHAT_ID, "라디에이터 OFF", "");
+    } else if (text == "/humidifier_on") {
+      humState = true;
+      digitalWrite(RELAY_HUM, RELAY_ON);
+      bot.sendMessage(CHAT_ID, "가습기 ON", "");
+    } else if (text == "/humidifier_off") {
+      humState = false;
+      digitalWrite(RELAY_HUM, RELAY_OFF);
+      bot.sendMessage(CHAT_ID, "가습기 OFF", "");
+    }
+  }
+  numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+}
