@@ -1,29 +1,243 @@
-int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-while (numNewMessages) {
-  for (int i = 0; i < numNewMessages; i++) {
-    String text = bot.messages[i].text;
-    
-    if (text == "/status") {
-      bot.sendMessage(CHAT_ID,
-        "T: " + String(temp, 1) + " H: " + String(hum, 1) + "% R:" + 
-        (radiatorState ? "ON" : "OFF") + " Hum:" + (humState ? "ON" : "OFF"), "");
-    } else if (text == "/radiator_on") {
-      radiatorState = true;
-      digitalWrite(RELAY_VALVE, RELAY_ON); digitalWrite(RELAY_FAN, RELAY_ON);
-      bot.sendMessage(CHAT_ID, "라디에이터 ON", "");
-    } else if (text == "/radiator_off") {
-      radiatorState = false;
-      digitalWrite(RELAY_VALVE, RELAY_OFF); digitalWrite(RELAY_FAN, RELAY_OFF);
-      bot.sendMessage(CHAT_ID, "라디에이터 OFF", "");
-    } else if (text == "/humidifier_on") {
-      humState = true;
-      digitalWrite(RELAY_HUM, RELAY_ON);
-      bot.sendMessage(CHAT_ID, "가습기 ON", "");
-    } else if (text == "/humidifier_off") {
-      humState = false;
-      digitalWrite(RELAY_HUM, RELAY_OFF);
-      bot.sendMessage(CHAT_ID, "가습기 OFF", "");
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>이끼 재배 환경</title>
+  <style>
+    body { margin: 0; background: #f0f0f0; font-family: sans-serif; }
+  </style>
+</head>
+<body>
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+.widget { max-width: 400px; margin: 0 auto; padding: 1rem; }
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.title { font-size: 15px; font-weight: 500; color: #111; }
+.last-update { font-size: 12px; color: #888; }
+.status-badge { font-size: 11px; padding: 3px 8px; border-radius: 999px; font-weight: 500; }
+.badge-auto { background: #e6f1fb; color: #185fa5; }
+.badge-manual { background: #faeeda; color: #854f0b; }
+.sensor-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.sensor-card { background: #e8e8e8; border-radius: 12px; padding: 14px 16px; }
+.sensor-label { font-size: 11px; color: #666; margin-bottom: 4px; letter-spacing: 0.04em; }
+.sensor-value { font-size: 28px; font-weight: 500; color: #111; line-height: 1; }
+.sensor-unit { font-size: 14px; color: #888; margin-left: 2px; }
+.sensor-bar { height: 4px; border-radius: 2px; background: #ccc; margin-top: 10px; overflow: hidden; }
+.sensor-fill { height: 100%; border-radius: 2px; transition: width 0.4s; }
+.fill-temp { background: #378ADD; }
+.fill-hum { background: #1D9E75; }
+.devices { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.device-card { background: #fff; border: 0.5px solid #ddd; border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.device-header { display: flex; justify-content: space-between; align-items: center; }
+.device-name { font-size: 13px; color: #666; }
+.dot { width: 8px; height: 8px; border-radius: 50%; }
+.dot-on { background: #1D9E75; }
+.dot-off { background: #bbb; }
+.toggle-row { display: flex; justify-content: space-between; align-items: center; }
+.toggle-label { font-size: 12px; font-weight: 500; }
+.label-on { color: #1D9E75; }
+.label-off { color: #aaa; }
+.toggle-btn { width: 44px; height: 26px; border-radius: 13px; border: none; cursor: pointer; position: relative; transition: background 0.2s; outline: none; }
+.toggle-btn.on { background: #1D9E75; }
+.toggle-btn.off { background: #bbb; }
+.toggle-btn::after { content: ''; position: absolute; width: 20px; height: 20px; border-radius: 50%; background: white; top: 3px; transition: left 0.2s; }
+.toggle-btn.on::after { left: 21px; }
+.toggle-btn.off::after { left: 3px; }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+.btn { padding: 10px; border-radius: 8px; border: 0.5px solid #ccc; background: #fff; font-size: 13px; color: #111; cursor: pointer; font-family: sans-serif; transition: background 0.15s; }
+.btn:hover { background: #f0f0f0; }
+.log-area { background: #e8e8e8; border-radius: 8px; padding: 10px 12px; max-height: 90px; overflow-y: auto; }
+.log-item { font-size: 11px; color: #666; line-height: 1.8; font-family: monospace; }
+.log-item.info { color: #185fa5; }
+.log-item.warn { color: #854f0b; }
+.spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #ccc; border-top-color: #185fa5; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 4px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+
+<div class="widget">
+  <div class="header">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span class="title">이끼 재배 환경</span>
+      <span class="status-badge badge-auto" id="mode-badge">자동</span>
+    </div>
+    <span class="last-update" id="last-update">—</span>
+  </div>
+
+  <div class="sensor-row">
+    <div class="sensor-card">
+      <div class="sensor-label">온도</div>
+      <div><span class="sensor-value" id="temp-val">—</span><span class="sensor-unit">°C</span></div>
+      <div class="sensor-bar"><div class="sensor-fill fill-temp" id="temp-bar" style="width:0%"></div></div>
+    </div>
+    <div class="sensor-card">
+      <div class="sensor-label">습도</div>
+      <div><span class="sensor-value" id="hum-val">—</span><span class="sensor-unit">%</span></div>
+      <div class="sensor-bar"><div class="sensor-fill fill-hum" id="hum-bar" style="width:0%"></div></div>
+    </div>
+  </div>
+
+  <div class="devices">
+    <div class="device-card">
+      <div class="device-header">
+        <span class="device-name">라디에이터</span>
+        <div class="dot dot-off" id="rad-dot"></div>
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-label label-off" id="rad-label">OFF</span>
+        <button class="toggle-btn off" id="rad-toggle" onclick="toggleDevice('radiator')"></button>
+      </div>
+    </div>
+    <div class="device-card">
+      <div class="device-header">
+        <span class="device-name">가습기</span>
+        <div class="dot dot-off" id="hum-dot"></div>
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-label label-off" id="hum-label">OFF</span>
+        <button class="toggle-btn off" id="hum-toggle" onclick="toggleDevice('humidifier')"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn" onclick="fetchStatus()"><span id="fetch-spin"></span>새로고침</button>
+    <button class="btn" onclick="toggleMode()">모드 전환</button>
+  </div>
+
+  <div class="log-area" id="log"></div>
+</div>
+
+<script>
+const TOKEN = '8752528167:AAEUtlbnvXqEFXE86tM3ejVhBFNWnosMWY8';
+const CHAT_ID = '8663806608';
+const API = `https://api.telegram.org/bot${TOKEN}`;
+
+let autoMode = true;
+let lastMsgId = 0;
+let deviceState = { radiator: false, humidifier: false };
+
+function addLog(msg, type='') {
+  const log = document.getElementById('log');
+  const now = new Date().toLocaleTimeString('ko-KR', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const div = document.createElement('div');
+  div.className = 'log-item ' + type;
+  div.textContent = `[${now}] ${msg}`;
+  log.prepend(div);
+  while(log.children.length > 20) log.removeChild(log.lastChild);
+}
+
+function setDevice(name, on) {
+  deviceState[name] = on;
+  const id = name === 'radiator' ? 'rad' : 'hum';
+  const dot = document.getElementById(id+'-dot');
+  const label = document.getElementById(id+'-label');
+  const btn = document.getElementById(id+'-toggle');
+  dot.className = 'dot ' + (on ? 'dot-on' : 'dot-off');
+  label.className = 'toggle-label ' + (on ? 'label-on' : 'label-off');
+  label.textContent = on ? 'ON' : 'OFF';
+  btn.className = 'toggle-btn ' + (on ? 'on' : 'off');
+}
+
+async function sendTelegram(text) {
+  try {
+    const r = await fetch(`${API}/sendMessage`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({chat_id: CHAT_ID, text})
+    });
+    const d = await r.json();
+    return d.ok;
+  } catch(e) { return false; }
+}
+
+async function getUpdates() {
+  try {
+    const r = await fetch(`${API}/getUpdates?offset=${lastMsgId+1}&limit=10&timeout=2`);
+    const d = await r.json();
+    if(!d.ok) return [];
+    return d.result || [];
+  } catch(e) { return []; }
+}
+
+function parseSensorData(text) {
+  const tMatch = text.match(/T[:\s]+([\-\d.]+)/i);
+  const hMatch = text.match(/H[:\s]+([\d.]+)%/i);
+  if(tMatch && hMatch) {
+    return { temp: parseFloat(tMatch[1]), hum: parseFloat(hMatch[1]) };
+  }
+  return null;
+}
+
+function updateSensorUI(temp, hum) {
+  document.getElementById('temp-val').textContent = temp.toFixed(1);
+  document.getElementById('hum-val').textContent = hum.toFixed(1);
+  const tPct = Math.min(100, Math.max(0, ((temp + 10) / 45) * 100));
+  const hPct = Math.min(100, Math.max(0, hum));
+  document.getElementById('temp-bar').style.width = tPct + '%';
+  document.getElementById('hum-bar').style.width = hPct + '%';
+  document.getElementById('last-update').textContent = new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
+
+  if(autoMode) {
+    const radOn = temp <= 8 || (deviceState.radiator && temp < 12);
+    const humOn = hum < 84 || (deviceState.humidifier && hum < 90);
+    setDevice('radiator', radOn);
+    setDevice('humidifier', humOn);
+  }
+}
+
+async function fetchStatus() {
+  const spin = document.getElementById('fetch-spin');
+  spin.innerHTML = '<span class="spinner"></span>';
+  addLog('상태 요청 전송 중...', 'info');
+  const sent = await sendTelegram('/status');
+  if(!sent) { addLog('전송 실패 — WiFi/봇 토큰 확인', 'warn'); spin.innerHTML=''; return; }
+  await new Promise(r => setTimeout(r, 2500));
+  const updates = await getUpdates();
+  spin.innerHTML = '';
+  for(const u of updates) {
+    const msg = u.message || u.channel_post;
+    if(!msg) continue;
+    if(u.update_id > lastMsgId) lastMsgId = u.update_id;
+    const text = msg.text || '';
+    const data = parseSensorData(text);
+    if(data) {
+      updateSensorUI(data.temp, data.hum);
+      addLog(`T:${data.temp.toFixed(1)}°C H:${data.hum.toFixed(1)}%`, 'info');
+      return;
     }
   }
-  numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+  addLog('응답 없음 — ESP32 전원 확인', 'warn');
 }
+
+async function toggleDevice(name) {
+  if(autoMode) {
+    addLog('수동 제어하려면 모드 전환 버튼을 먼저 누르세요', 'warn');
+    return;
+  }
+  const newState = !deviceState[name];
+  setDevice(name, newState);
+  const cmd = name === 'radiator'
+    ? (newState ? '/radiator_on' : '/radiator_off')
+    : (newState ? '/humidifier_on' : '/humidifier_off');
+  const sent = await sendTelegram(cmd);
+  addLog(`${name === 'radiator' ? '라디에이터' : '가습기'} ${newState ? 'ON' : 'OFF'} ${sent ? '전송됨' : '실패'}`, sent ? 'info' : 'warn');
+}
+
+function toggleMode() {
+  autoMode = !autoMode;
+  const badge = document.getElementById('mode-badge');
+  badge.textContent = autoMode ? '자동' : '수동';
+  badge.className = 'status-badge ' + (autoMode ? 'badge-auto' : 'badge-manual');
+  addLog(`${autoMode ? '자동' : '수동'} 모드로 전환`, 'info');
+}
+
+fetchStatus();
+setInterval(fetchStatus, 30000);
+</script>
+
+</body>
+</html>
