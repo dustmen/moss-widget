@@ -112,12 +112,9 @@
 </div>
 
 <script>
-const TOKEN = '8752528167:AAEUtlbnvXqEFXE86tM3ejVhBFNWnosMWY8';
-const CHAT_ID = '8663806608';
-const API = `https://api.telegram.org/bot${TOKEN}`;
+const ESP32_IP = 'http://172.30.1.62';  // ESP32 IP 주소
 
 let autoMode = true;
-let lastMsgId = 0;
 let deviceState = { radiator: false, humidifier: false };
 
 function addLog(msg, type='') {
@@ -142,126 +139,41 @@ function setDevice(name, on) {
   btn.className = 'toggle-btn ' + (on ? 'on' : 'off');
 }
 
-async function sendTelegram(text) {
-  try {
-    const r = await fetch(`${API}/sendMessage`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({chat_id: CHAT_ID, text})
-    });
-    const d = await r.json();
-    return d.ok;
-  } catch(e) { return false; }
-}
-
-async function getUpdates() {
-  try {
-    const r = await fetch(`${API}/getUpdates?offset=${lastMsgId+1}&limit=10&timeout=2`);
-    const d = await r.json();
-    if(!d.ok) return [];
-    return d.result || [];
-  } catch(e) { return []; }
-}
-
-function parseSensorData(text) {
-  const tMatch = text.match(/T:\s*([\-\d.]+)/i);
-  const hMatch = text.match(/H:\s*([\d.]+)%/i);
-  const rMatch = text.match(/R:(ON|OFF)/i);
-  const humMatch = text.match(/HUM:\s*(ON|OFF)/i);
-  if(tMatch && hMatch) {
-    return {
-      temp: parseFloat(tMatch[1]),
-      hum: parseFloat(hMatch[1]),
-      radiator: rMatch ? rMatch[1].toUpperCase() === 'ON' : null,
-      humidifier: humMatch ? humMatch[1].toUpperCase() === 'ON' : null
-    };
-  }
-  return null;
-}
-
-function updateSensorUI(data) {
-  document.getElementById('temp-val').textContent = data.temp.toFixed(1);
-  document.getElementById('hum-val').textContent = data.hum.toFixed(1);
-  const tPct = Math.min(100, Math.max(0, ((data.temp + 10) / 45) * 100));
-  const hPct = Math.min(100, Math.max(0, data.hum));
-  document.getElementById('temp-bar').style.width = tPct + '%';
-  document.getElementById('hum-bar').style.width = hPct + '%';
-  document.getElementById('last-update').textContent = new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
-
-  if(data.radiator !== null) setDevice('radiator', data.radiator);
-  if(data.humidifier !== null) setDevice('humidifier', data.humidifier);
-}
-
 async function fetchStatus() {
   const spin = document.getElementById('fetch-spin');
   spin.innerHTML = '<span class="spinner"></span>';
-  addLog('상태 요청 전송 중...', 'info');
-
-  // 1단계: 현재 마지막 메시지 ID 먼저 파악
+  addLog('상태 요청 중...', 'info');
   try {
-    const before = await fetch(`${API}/getUpdates?limit=1&offset=-1`);
-    const bd = await before.json();
-    if(bd.ok && bd.result.length > 0) {
-      lastMsgId = bd.result[bd.result.length - 1].update_id;
+    const r = await fetch(`${ESP32_IP}/status`);
+    const data = await r.json();
+    document.getElementById('temp-val').textContent = parseFloat(data.temp).toFixed(1);
+    document.getElementById('hum-val').textContent = parseFloat(data.hum).toFixed(1);
+    const tPct = Math.min(100, Math.max(0, ((data.temp + 10) / 45) * 100));
+    const hPct = Math.min(100, Math.max(0, data.hum));
+    document.getElementById('temp-bar').style.width = tPct + '%';
+    document.getElementById('hum-bar').style.width = hPct + '%';
+    document.getElementById('last-update').textContent = new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
+    setDevice('radiator', data.radiator);
+    setDevice('humidifier', data.humidifier);
+    if(data.manual !== undefined) {
+      autoMode = !data.manual;
+      const badge = document.getElementById('mode-badge');
+      badge.textContent = autoMode ? '자동' : '수동';
+      badge.className = 'status-badge ' + (autoMode ? 'badge-auto' : 'badge-manual');
     }
-  } catch(e) {}
-
-  // 2단계: /status 전송
-  const sent = await sendTelegram('/status');
-  if(!sent) {
-    addLog('전송 실패 — WiFi 확인', 'warn');
-    spin.innerHTML = '';
-    return;
+    addLog(`T:${parseFloat(data.temp).toFixed(1)}°C H:${parseFloat(data.hum).toFixed(1)}%`, 'info');
+  } catch(e) {
+    addLog('연결 실패 — ESP32 확인', 'warn');
   }
-
-  // 3단계: ESP32 응답 폴링 (8초간 1초마다 확인)
-  for(let i = 0; i < 8; i++) {
-    await new Promise(r => setTimeout(r, 1000));
-    const updates = await getUpdates();
-    for(const u of updates) {
-      const msg = u.message || u.channel_post;
-      if(!msg) continue;
-      if(u.update_id > lastMsgId) lastMsgId = u.update_id;
-      const text = msg.text || '';
-      const data = parseSensorData(text);
-      if(data) {
-        updateSensorUI(data);
-        addLog(`T:${data.temp.toFixed(1)}°C H:${data.hum.toFixed(1)}%`, 'info');
-        spin.innerHTML = '';
-        return;
-      }
-    }
-  }
-
   spin.innerHTML = '';
-  addLog('응답 없음 — ESP32 전원 확인', 'warn');
 }
 
-async function toggleDevice(name) {
-  if(autoMode) {
-    addLog('수동 제어하려면 모드 전환 버튼을 먼저 누르세요', 'warn');
-    return;
+async function sendControl(cmd) {
+  try {
+    await fetch(`${ESP32_IP}/control?cmd=${cmd}`);
+  } catch(e) {
+    addLog('명령 전송 실패', 'warn');
   }
-  const newState = !deviceState[name];
-  setDevice(name, newState);
-  const cmd = name === 'radiator'
-    ? (newState ? '/radiator_on' : '/radiator_off')
-    : (newState ? '/humidifier_on' : '/humidifier_off');
-  const sent = await sendTelegram(cmd);
-  addLog(`${name === 'radiator' ? '라디에이터' : '가습기'} ${newState ? 'ON' : 'OFF'} ${sent ? '전송됨' : '실패'}`, sent ? 'info' : 'warn');
 }
 
-function toggleMode() {
-  autoMode = !autoMode;
-  const badge = document.getElementById('mode-badge');
-  badge.textContent = autoMode ? '자동' : '수동';
-  badge.className = 'status-badge ' + (autoMode ? 'badge-auto' : 'badge-manual');
-  addLog(`${autoMode ? '자동' : '수동'} 모드로 전환`, 'info');
-}
-
-fetchStatus();
-setInterval(fetchStatus, 30000);
-</script>
-
-</body>
-</html>
+asyn
